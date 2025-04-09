@@ -30,7 +30,17 @@ python .\scripts\apply_schema.py
 Use the below script to create new HTTP targets. Use this example if you just want to try out the program coupled with the provided webserver.
 
 ```
-python .\scripts\healthcheck_db_setup.py --base-url http://127.0.0.1:8080 --routes /a,/b,/c --check-interval 5
+# Add a new healthcheck setting
+python scripts\healthcheck_db_setup.py add --url=https://example.com/path
+
+# List all healthcheck settings (with filters)
+python scripts\healthcheck_db_setup.py list [--active-only] [--url-filter=example.com]
+
+# Update existing healthcheck settings
+python scripts\healthcheck_db_setup.py update --id=1 [--url=https://new-url.com] [--active=false] [--check-interval=120]
+
+# Delete healthcheck settings
+python scripts\healthcheck_db_setup.py delete --id=1
 ```
 
 ### Spawn a webserver serving multiple routes
