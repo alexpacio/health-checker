@@ -6,13 +6,17 @@ This script manages healthcheck settings entries in the PostgreSQL database.
 
 Usage:
     # Add a new healthcheck setting
-    python healthcheck_db_setup.py add --url=https://example.com/path
+    python healthcheck_db_setup.py add --url=https://example.com/path [--regex-match="Success"] [--expected-status-code=200] 
+                                       [--check-interval=60] [--timeout-ms=5000] 
+                                       [--headers='{"User-Agent": "MyBot"}'] [--active=true]
     
     # List all healthcheck settings (with filters)
     python healthcheck_db_setup.py list [--active-only] [--url-filter=example.com]
     
     # Update existing healthcheck settings
-    python healthcheck_db_setup.py update --id=1 [--url=https://new-url.com] [--active=false] [--check-interval=120]
+    python healthcheck_db_setup.py update --id=1 [--url=https://new-url.com] [--regex-match="NewPattern"] 
+                                          [--active=false] [--check-interval=120] [--timeout-ms=10000]
+                                          [--headers='{"User-Agent": "MyBot"}'] [--expected-status-code=200]
     
     # Delete healthcheck settings
     python healthcheck_db_setup.py delete --id=1
@@ -22,6 +26,7 @@ Configuration:
     All settings are loaded via RuntimeSettingsReader from the configuration file.
 
 Constraints:
+    check_interval must be between 5 and 300 seconds
     URL must start with 'http://' or 'https://'
     Headers must be in valid JSON format
     Timeout is in milliseconds
@@ -41,7 +46,7 @@ import json
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 # Import RuntimeSettingsReader
-from src.runtime_settings import RuntimeSettingsReader, DatabaseSettings
+from src.runtime_settings import RuntimeSettingsReader
 
 # Configure logging
 logging.basicConfig(
@@ -50,8 +55,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-async def add_healthcheck_setting(dsn, url, check_interval=60, timeout_ms=5000):
+async def add_healthcheck_setting(dsn, url, regex_match=None, expected_status_code=200, check_interval=60, timeout_ms=5000, headers=None, active=True):
     """Add a healthcheck setting to the database for the specified URL."""
     logger.info(f"Adding healthcheck setting for URL: {url}")
     
@@ -59,6 +63,12 @@ async def add_healthcheck_setting(dsn, url, check_interval=60, timeout_ms=5000):
     if not url.startswith('http://') and not url.startswith('https://'):
         raise ValueError(f"URL must start with 'http://' or 'https://': {url}")
     
+    # Process headers
+    if headers is None:
+        headers = json.dumps({"Accept": "text/html"})
+    elif not isinstance(headers, str):
+        headers = json.dumps(headers)
+        
     try:
         # Connect to the database asynchronously
         async with await psycopg.AsyncConnection.connect(dsn, row_factory=dict_row) as conn:
@@ -66,17 +76,15 @@ async def add_healthcheck_setting(dsn, url, check_interval=60, timeout_ms=5000):
                 # Prepare insert query
                 insert_query = """
                 INSERT INTO healthcheck_settings 
-                (url, expected_status_code, check_interval, timeout_ms, headers, active)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                (url, regex_match, expected_status_code, check_interval, timeout_ms, headers, active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING id;
                 """
-                
-                headers = json.dumps({"Accept": "text/html"})
                 
                 # Execute the insert query
                 await cur.execute(
                     insert_query, 
-                    (url, 200, check_interval, timeout_ms, headers, True)
+                    (url, regex_match, expected_status_code, check_interval, timeout_ms, headers, active)
                 )
                 
                 result = await cur.fetchone()
@@ -306,10 +314,18 @@ def parse_arguments():
     add_parser = subparsers.add_parser('add', help='Add a new healthcheck setting')
     add_parser.add_argument('--url', type=str, required=True,
                        help='Complete URL to monitor (e.g., https://example.com/path)')
+    add_parser.add_argument('--regex-match', type=str,
+                       help='Regular expression pattern to match in the response body')
+    add_parser.add_argument('--expected-status-code', type=int, default=200,
+                       help='Expected HTTP status code for a successful response (default: 200)')
     add_parser.add_argument('--check-interval', type=int, default=60,
-                       help=f'Interval in seconds between health checks (must be between {MIN_CHECK_INTERVAL} and {MAX_CHECK_INTERVAL})')
-    add_parser.add_argument('--timeout', type=int, default=5000,
+                       help=f'Interval in seconds between health checks')
+    add_parser.add_argument('--timeout-ms', type=int, default=5000,
                        help='Timeout in milliseconds for health checks')
+    add_parser.add_argument('--headers', type=str,
+                       help='Custom headers in JSON format (e.g., \'{"User-Agent": "MyBot", "Accept": "application/json"}\')')
+    add_parser.add_argument('--active', type=str, choices=['true', 'false'], default='true',
+                       help='Set if the healthcheck is active (default: true)')
     
     # List command
     list_parser = subparsers.add_parser('list', help='List healthcheck settings')
@@ -329,8 +345,8 @@ def parse_arguments():
     update_parser.add_argument('--expected-status-code', type=int,
                           help='New expected HTTP status code')
     update_parser.add_argument('--check-interval', type=int,
-                          help=f'New interval in seconds between health checks (must be between {MIN_CHECK_INTERVAL} and {MAX_CHECK_INTERVAL})')
-    update_parser.add_argument('--timeout', type=int,
+                          help=f'New interval in seconds between health checks')
+    update_parser.add_argument('--timeout-ms', type=int,
                           help='New timeout in milliseconds for health checks')
     update_parser.add_argument('--headers', type=str,
                           help='New headers in JSON format')
@@ -462,7 +478,28 @@ async def main():
     try:
         # Execute the appropriate command
         if args.command == 'add':
-            setting_id = await add_healthcheck_setting(dsn, args.url, args.check_interval, args.timeout)
+            # Process headers if provided
+            headers = None
+            if args.headers is not None:
+                try:
+                    headers = json.loads(args.headers)
+                except json.JSONDecodeError:
+                    logger.error("Invalid JSON format for headers")
+                    sys.exit(1)
+            
+            # Convert active string to boolean
+            active = args.active.lower() == 'true' if args.active else True
+            
+            setting_id = await add_healthcheck_setting(
+                dsn, 
+                args.url, 
+                regex_match=args.regex_match,
+                expected_status_code=args.expected_status_code,
+                check_interval=args.check_interval, 
+                timeout_ms=args.timeout_ms,
+                headers=headers,
+                active=active
+            )
             print(f"Successfully added healthcheck setting with ID {setting_id}")
             logger.info("Database setup complete.")
             
@@ -481,8 +518,8 @@ async def main():
                 updates['expected_status_code'] = args.expected_status_code
             if args.check_interval is not None:
                 updates['check_interval'] = args.check_interval
-            if args.timeout is not None:
-                updates['timeout_ms'] = args.timeout
+            if args.timeout_ms is not None:
+                updates['timeout_ms'] = args.timeout_ms
             if args.headers is not None:
                 try:
                     updates['headers'] = json.loads(args.headers)

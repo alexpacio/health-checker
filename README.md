@@ -2,7 +2,7 @@
 
 The Health Checker is a program that allows you to massively check and record the availability of any kind of target. Currently only HTTP(s) is supported as a protocol.
 
-## Environment bootstrap
+# Environment bootstrap
 
 This program has been tested on Windows 11 running on AMD64 and Python 3.13.2. The following commands follow the Windows path style and are only tested on Powershell.
 
@@ -27,20 +27,34 @@ python .\scripts\apply_schema.py
 ```
 
 ### Create new targets
-Use the below script to create new HTTP targets. Use this example if you just want to try out the program coupled with the provided webserver.
+Use the below CLI program to create new HTTP targets.
+The CLI program can be used to interact with the health checker's settings.
 
+Here's an example of how the CLI can be used:
 ```
 # Add a new healthcheck setting
-python scripts\healthcheck_db_setup.py add --url=https://example.com/path
+python healthcheck_db_setup.py add --url=https://example.com/path [--regex-match="Success"] [--expected-status-code=200] 
+                                    [--check-interval=60] [--timeout-ms=5000] 
+                                    [--headers='{"User-Agent": "MyBot"}'] [--active=true]
 
 # List all healthcheck settings (with filters)
-python scripts\healthcheck_db_setup.py list [--active-only] [--url-filter=example.com]
+python healthcheck_db_setup.py list [--active-only] [--url-filter=example.com]
 
 # Update existing healthcheck settings
-python scripts\healthcheck_db_setup.py update --id=1 [--url=https://new-url.com] [--active=false] [--check-interval=120]
+python healthcheck_db_setup.py update --id=1 [--url=https://new-url.com] [--regex-match="NewPattern"] 
+                                        [--active=false] [--check-interval=120] [--timeout-ms=10000]
+                                        [--headers='{"User-Agent": "MyBot"}'] [--expected-status-code=200]
 
 # Delete healthcheck settings
-python scripts\healthcheck_db_setup.py delete --id=1
+python healthcheck_db_setup.py delete --id=1
+```
+
+Now, with the purpose of moving on with your own playground, just move on by adding sample data like this:
+
+```
+python scripts\healthcheck_db_setup.py add --url=http://127.0.0.1:8080/a --check-interval=5
+python scripts\healthcheck_db_setup.py add --url=http://127.0.0.1:8080/b --check-interval=10
+python scripts\healthcheck_db_setup.py add --url=http://127.0.0.1:8080/c --check-interval=300
 ```
 
 ### Spawn a webserver serving multiple routes
@@ -69,3 +83,7 @@ Note: the test_db_recorder.py test suite is an E2E test and requires a PostgreSQ
 ```
 python -m unittest discover -s tests
 ```
+
+## Caveats
+
+The regex match feature works best with text-based responses, such as HTML, JSON, XML, plain text, etc. For binary content (like images, PDFs, etc.), the regex match will fail with a specific error message indicating that regex matching can't be performed on binary content.
